@@ -173,4 +173,17 @@ async def grade_quiz_answer(
     )
     
     from app.schemas.quiz import QuizAttemptAnswerResponse
-    return QuizAttemptAnswerResponse(**answer.__dict__)
+    # Explicitly construct response to avoid serialization issues
+    return QuizAttemptAnswerResponse(
+        id=answer.id,
+        attempt_id=answer.attempt_id,
+        question_id=answer.question_id,
+        selected_option_id=answer.selected_option_id,
+        descriptive_answer=answer.descriptive_answer,
+        marks_obtained=answer.marks_obtained,
+        is_correct=answer.is_correct,
+        graded_by=answer.graded_by,
+        graded_at=answer.graded_at,
+        feedback=answer.feedback,
+        created_at=answer.created_at
+    )

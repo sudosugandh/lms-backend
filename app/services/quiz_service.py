@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func
 from fastapi import HTTPException, status
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict
 from app.db.models.quiz import Quiz, QuizQuestion, QuizOption, QuizAttempt, QuizAttemptAnswer, QuizStatus, QuestionType
 from app.db.models.class_model import Class
@@ -48,6 +48,28 @@ class QuizService:
                 detail="You are not assigned to teach this subject in this class"
             )
         
+        # Validate that end_time is after start_time if both are provided
+        if quiz_data.start_time and quiz_data.end_time:
+            # Ensure both are timezone-aware for comparison
+            start_time = quiz_data.start_time
+            end_time = quiz_data.end_time
+            
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            else:
+                start_time = start_time.astimezone(timezone.utc)
+            
+            if end_time.tzinfo is None:
+                end_time = end_time.replace(tzinfo=timezone.utc)
+            else:
+                end_time = end_time.astimezone(timezone.utc)
+            
+            if end_time <= start_time:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="End time must be after start time"
+                )
+        
         quiz = Quiz(
             institute_id=institute_id,
             class_id=quiz_data.class_id,
@@ -79,6 +101,28 @@ class QuizService:
     ) -> Quiz:
         """Update a quiz."""
         quiz = QuizService.get_quiz(db, quiz_id, institute_id, teacher_id)
+        
+        # Validate that end_time is after start_time if both are provided
+        start_time = quiz_data.start_time if quiz_data.start_time is not None else quiz.start_time
+        end_time = quiz_data.end_time if quiz_data.end_time is not None else quiz.end_time
+        
+        if start_time and end_time:
+            # Ensure both are timezone-aware for comparison
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            else:
+                start_time = start_time.astimezone(timezone.utc)
+            
+            if end_time.tzinfo is None:
+                end_time = end_time.replace(tzinfo=timezone.utc)
+            else:
+                end_time = end_time.astimezone(timezone.utc)
+            
+            if end_time <= start_time:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="End time must be after start time"
+                )
         
         update_data = quiz_data.dict(exclude_unset=True)
         for field, value in update_data.items():
@@ -366,18 +410,32 @@ class QuizAttemptService:
             )
         
         # Check time constraints
-        now = datetime.utcnow()
-        if quiz.start_time and quiz.start_time > now:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Quiz has not started yet"
-            )
+        # Use timezone-aware UTC datetime to match database timezone-aware datetimes
+        now = datetime.now(timezone.utc)
         
-        if quiz.end_time and quiz.end_time < now:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Quiz has ended"
-            )
+        if quiz.start_time:
+            # Ensure start_time is timezone-aware for comparison
+            if quiz.start_time.tzinfo is None:
+                start_time_utc = quiz.start_time.replace(tzinfo=timezone.utc)
+            else:
+                start_time_utc = quiz.start_time.astimezone(timezone.utc)
+            if start_time_utc > now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quiz has not started yet"
+                )
+        
+        if quiz.end_time:
+            # Ensure end_time is timezone-aware for comparison
+            if quiz.end_time.tzinfo is None:
+                end_time_utc = quiz.end_time.replace(tzinfo=timezone.utc)
+            else:
+                end_time_utc = quiz.end_time.astimezone(timezone.utc)
+            if end_time_utc < now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quiz has ended"
+                )
         
         # Verify student is enrolled in class
         enrollment = db.query(Enrollment).filter(
@@ -394,18 +452,29 @@ class QuizAttemptService:
             )
         
         # Check for existing attempts
-        existing_attempt = db.query(QuizAttempt).filter(
+        # First check for IN_PROGRESS attempts (can resume)
+        in_progress_attempt = db.query(QuizAttempt).filter(
             and_(
                 QuizAttempt.quiz_id == quiz_id,
                 QuizAttempt.student_id == student_id,
-                QuizAttempt.status.in_(["IN_PROGRESS", "SUBMITTED"])
+                QuizAttempt.status == "IN_PROGRESS"
             )
         ).first()
         
-        if existing_attempt:
-            if existing_attempt.status == "IN_PROGRESS":
-                return existing_attempt  # Return existing in-progress attempt
-            elif not quiz.allow_multiple_attempts:
+        if in_progress_attempt:
+            return in_progress_attempt  # Return existing in-progress attempt
+        
+        # Check for any completed attempts (SUBMITTED or GRADED)
+        if not quiz.allow_multiple_attempts:
+            completed_attempt = db.query(QuizAttempt).filter(
+                and_(
+                    QuizAttempt.quiz_id == quiz_id,
+                    QuizAttempt.student_id == student_id,
+                    QuizAttempt.status.in_(["SUBMITTED", "GRADED"])
+                )
+            ).first()
+            
+            if completed_attempt:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Multiple attempts not allowed for this quiz"
@@ -449,17 +518,31 @@ class QuizAttemptService:
         
         quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
         
-        # Check time constraints
-        now = datetime.utcnow()
-        if quiz.end_time and quiz.end_time < now:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Quiz has ended"
-            )
+        # Check time constraints - use timezone-aware UTC datetime
+        now = datetime.now(timezone.utc)
+        
+        # Ensure quiz.end_time is timezone-aware for comparison
+        if quiz.end_time:
+            if quiz.end_time.tzinfo is None:
+                end_time_utc = quiz.end_time.replace(tzinfo=timezone.utc)
+            else:
+                end_time_utc = quiz.end_time.astimezone(timezone.utc)
+            if end_time_utc < now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Quiz has ended"
+                )
         
         # Check duration if set
         if quiz.duration_minutes:
-            elapsed_minutes = (now - attempt.started_at).total_seconds() / 60
+            # Ensure started_at is timezone-aware for calculation
+            if attempt.started_at.tzinfo is None:
+                started_at_utc = attempt.started_at.replace(tzinfo=timezone.utc)
+            else:
+                started_at_utc = attempt.started_at.astimezone(timezone.utc)
+            
+            elapsed_seconds = (now - started_at_utc).total_seconds()
+            elapsed_minutes = elapsed_seconds / 60
             if elapsed_minutes > quiz.duration_minutes:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -503,9 +586,18 @@ class QuizAttemptService:
             
             db.add(answer)
         
-        # Update attempt
+        # Update attempt - ensure timezone-aware calculation
         attempt.submitted_at = now
-        attempt.time_taken_minutes = int((now - attempt.started_at).total_seconds() / 60)
+        
+        # Ensure started_at is timezone-aware for calculation
+        if attempt.started_at.tzinfo is None:
+            started_at_utc = attempt.started_at.replace(tzinfo=timezone.utc)
+        else:
+            started_at_utc = attempt.started_at.astimezone(timezone.utc)
+        
+        # Calculate time taken in minutes (ensure positive)
+        time_taken_seconds = (now - started_at_utc).total_seconds()
+        attempt.time_taken_minutes = max(0, int(time_taken_seconds / 60))
         attempt.status = "SUBMITTED"
         attempt.total_marks_obtained = total_marks
         
@@ -546,6 +638,41 @@ class QuizAttemptService:
             result.percentage = (total_marks / quiz.total_marks * 100) if quiz.total_marks > 0 else 0
             result.quiz_attempt_id = attempt.id
             result.status = "PENDING" if has_descriptive else "GRADED"
+        
+        # Create notification for teacher when student submits quiz
+        try:
+            from app.services.notification_service import NotificationService
+            from app.db.models.user import User
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            student = db.query(User).filter(User.id == student_id).first()
+            student_name = student.name if student else "A student"
+            
+            # Notify the teacher who created the quiz
+            if quiz.created_by:
+                NotificationService.create_notification(
+                    db=db,
+                    institute_id=institute_id,
+                    title="New Quiz Submission",
+                    message=f"{student_name} has submitted the quiz '{quiz.title}'. "
+                           f"{'Manual grading required for descriptive questions.' if has_descriptive else 'Quiz is fully graded.'}",
+                    notification_type="QUIZ_SUBMITTED",
+                    target_user_id=quiz.created_by,
+                    notification_metadata={
+                        "quiz_id": quiz.id,
+                        "quiz_title": quiz.title,
+                        "attempt_id": attempt.id,
+                        "student_id": student_id,
+                        "student_name": student_name,
+                        "needs_grading": has_descriptive
+                    }
+                )
+        except Exception as e:
+            # Don't fail quiz submission if notification fails
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to create notification for quiz submission: {str(e)}")
         
         db.commit()
         db.refresh(attempt)

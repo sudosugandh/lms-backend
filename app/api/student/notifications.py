@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 from typing import List, Optional
 from app.db.session import get_db
 from app.db.models.user import User

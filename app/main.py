@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -45,10 +45,32 @@ app.add_middleware(TenantMiddleware)
 async def api_exception_handler(request: Request, exc: BaseAPIException):
     """Handle custom API exceptions with consistent error format."""
     logger.warning(f"API Exception: {exc.status_code} - {exc.detail}")
-    return JSONResponse(
+    response = JSONResponse(
         status_code=exc.status_code,
         content=exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
     )
+    # Ensure CORS headers are added to error responses
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions with consistent format and CORS headers."""
+    logger.warning(f"HTTP Exception: {exc.status_code} - {exc.detail}")
+    response = JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+    # Ensure CORS headers are added to error responses
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 @app.exception_handler(RequestValidationError)
@@ -64,7 +86,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         error_messages.append(f"{loc}: {msg}")
     
     detail = "Validation error: " + "; ".join(error_messages) if error_messages else "Validation error"
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "detail": detail,
@@ -72,19 +94,31 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error_data": {"errors": errors}
         }
     )
+    # Ensure CORS headers are added to error responses
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """Handle unexpected exceptions."""
     logger.error(f"Unexpected error: {type(exc).__name__}: {str(exc)}", exc_info=True)
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "detail": "An internal error occurred" if settings.ENVIRONMENT == "production" else str(exc),
             "error_code": "INTERNAL_ERROR"
         }
     )
+    # Ensure CORS headers are added to error responses
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 # Include routers

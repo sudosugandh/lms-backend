@@ -235,18 +235,26 @@ class GradingService:
                 result.status = "GRADED"
                 result.updated_at = now
                 
-                # Create notification for student (and their parents)
+                # Create notification for student (and their parents) when quiz is fully graded
                 from app.services.notification_service import NotificationService
                 quiz_obj = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
                 if quiz_obj:
+                    percentage = (total_marks / quiz.total_marks * 100) if quiz.total_marks > 0 else 0
                     NotificationService.create_notification(
                         db=db,
                         institute_id=quiz_obj.institute_id,
-                        title="Quiz Result Available",
-                        message=f"Your quiz result is now available. Score: {total_marks}/{quiz.total_marks}",
-                        notification_type="RESULT_ANNOUNCED",
+                        title="Quiz Graded",
+                        message=f"Your quiz '{quiz_obj.title}' has been graded. Score: {total_marks}/{quiz.total_marks} ({percentage:.1f}%)",
+                        notification_type="QUIZ_GRADED",
                         target_user_id=attempt.student_id,
-                        notification_metadata={"result_id": result.id, "quiz_id": quiz.id},
+                        notification_metadata={
+                            "result_id": result.id,
+                            "quiz_id": quiz.id,
+                            "quiz_title": quiz_obj.title,
+                            "marks_obtained": total_marks,
+                            "total_marks": quiz.total_marks,
+                            "percentage": round(percentage, 2)
+                        },
                         include_parents=True
                     )
         

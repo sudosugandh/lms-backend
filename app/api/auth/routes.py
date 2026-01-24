@@ -51,9 +51,14 @@ async def login(
         
         institute = resolve_institute_by_host(db, host)
         if not institute:
+            # Get available domains for better error message
+            from app.db.models.domain import Domain
+            available_domains = db.query(Domain.host_name).filter(Domain.is_active == True).all()
+            available = [d.host_name for d in available_domains]
+            
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Institute not found for this domain: '{host}'. Available domains: Check database."
+                detail=f"Institute not found for this domain: '{host}'. Available domains: {', '.join(available) if available else 'None'}. Make sure the domain exists in the database and matches exactly (including port if specified)."
             )
         
         # Validate user's institute matches resolved institute

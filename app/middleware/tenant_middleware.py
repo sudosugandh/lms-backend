@@ -56,6 +56,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         db: Session = None
+        temp_db: Session = None
         try:
             # Try custom X-Host header first (for SSR from Next.js)
             # Then fall back to standard Host header
@@ -79,59 +80,81 @@ class TenantMiddleware(BaseHTTPMiddleware):
             # Create DB session for tenant resolution
             db = SessionLocal()
             
-            # Resolve institute by host (exact match)
-            institute = resolve_institute_by_host(db, host)
-            
-            logger.info(f"[TENANT MIDDLEWARE] Institute lookup result: {institute}")
-            sys.stdout.flush()
-            
-            if not institute:
-                # Close DB before raising error
-                if db:
-                    db.close()
-                    db = None
-                # Provide helpful error message
-                from app.db.models.domain import Domain
-                temp_db = SessionLocal()
-                try:
-                    available_domains = temp_db.query(Domain.host_name).filter(Domain.is_active == True).all()
-                    available = [d.host_name for d in available_domains]
-                finally:
-                    temp_db.close()
+            try:
+                # Resolve institute by host (exact match)
+                institute = resolve_institute_by_host(db, host)
                 
-                error_detail = (
-                    f"Institute not found for domain '{host}'. "
-                    f"Available domains: {', '.join(available) if available else 'None'}. "
-                    f"Received X-Host: '{x_host}', Host: '{host_header}'. "
-                    f"Make sure the domain exists in the database and matches exactly (including port)."
-                )
-                logger.error(f"[TENANT MIDDLEWARE] ERROR: {error_detail}")
+                logger.info(f"[TENANT MIDDLEWARE] Institute lookup result: {institute}")
                 sys.stdout.flush()
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=error_detail
-                )
-            
-            logger.info(f"[TENANT MIDDLEWARE] ✅ Found Institute ID: {institute.id}, Name: {institute.name}")
-            
-            # Attach institute_id to request state (must be set before call_next)
-            request.state.institute_id = institute.id
-            request.state.institute = institute
-            
-            logger.info(f"[TENANT MIDDLEWARE] ✅ Set request.state.institute_id = {institute.id}")
-            sys.stdout.flush()
-            
-            # Close DB after successful resolution
-            if db:
-                db.close()
-                db = None
+                
+                if not institute:
+                    # Provide helpful error message
+                    from app.db.models.domain import Domain
+                    temp_db = SessionLocal()
+                    try:
+                        available_domains = temp_db.query(Domain.host_name).filter(Domain.is_active == True).all()
+                        available = [d.host_name for d in available_domains]
+                    finally:
+                        if temp_db:
+                            temp_db.rollback()
+                            temp_db.close()
+                            temp_db = None
+                    
+                    error_detail = (
+                        f"Institute not found for domain '{host}'. "
+                        f"Available domains: {', '.join(available) if available else 'None'}. "
+                        f"Received X-Host: '{x_host}', Host: '{host_header}'. "
+                        f"Make sure the domain exists in the database and matches exactly (including port)."
+                    )
+                    logger.error(f"[TENANT MIDDLEWARE] ERROR: {error_detail}")
+                    sys.stdout.flush()
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=error_detail
+                    )
+                
+                logger.info(f"[TENANT MIDDLEWARE] ✅ Found Institute ID: {institute.id}, Name: {institute.name}")
+                
+                # Attach institute_id to request state (must be set before call_next)
+                request.state.institute_id = institute.id
+                request.state.institute = institute
+                
+                logger.info(f"[TENANT MIDDLEWARE] ✅ Set request.state.institute_id = {institute.id}")
+                sys.stdout.flush()
+            except Exception:
+                # Rollback any pending transaction before closing
+                if db:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                raise
+            finally:
+                # Always close DB session after resolution
+                if db:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+                    db = None
             
         except HTTPException as he:
             # HTTP exceptions are re-raised as-is
             logger.error(f"[TENANT MIDDLEWARE] HTTPException: {he.detail}")
             sys.stdout.flush()
+            # Ensure all sessions are closed
+            if temp_db:
+                try:
+                    temp_db.rollback()
+                    temp_db.close()
+                except Exception:
+                    pass
             if db:
-                db.close()
+                try:
+                    db.rollback()
+                    db.close()
+                except Exception:
+                    pass
             raise
         except Exception as e:
             # Any other exception is converted to 500 error
@@ -139,8 +162,19 @@ class TenantMiddleware(BaseHTTPMiddleware):
             import traceback
             logger.error(traceback.format_exc())
             sys.stdout.flush()
+            # Ensure all sessions are closed
+            if temp_db:
+                try:
+                    temp_db.rollback()
+                    temp_db.close()
+                except Exception:
+                    pass
             if db:
-                db.close()
+                try:
+                    db.rollback()
+                    db.close()
+                except Exception:
+                    pass
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error resolving tenant: {str(e)}"

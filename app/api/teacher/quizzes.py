@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 from typing import List, Optional
 from app.db.session import get_db
 from app.db.models.user import User
@@ -360,7 +361,9 @@ async def get_attempt_details(
     """Get detailed attempt with answers (Teacher only)."""
     institute_id = request.state.institute_id
     
-    from app.db.models.quiz import QuizAttempt, QuizAttemptAnswer
+    from app.db.models.quiz import QuizAttempt, QuizAttemptAnswer, Quiz
+    from app.schemas.quiz import QuizAttemptAnswerResponse
+    
     attempt = db.query(QuizAttempt).join(Quiz).filter(
         and_(
             QuizAttempt.id == attempt_id,
@@ -381,12 +384,181 @@ async def get_attempt_details(
     ).all()
     
     student = db.query(User).filter(User.id == attempt.student_id).first()
-    from app.db.models.quiz import Quiz
     quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
     
+    # Explicitly construct answer responses to avoid serialization issues
+    answer_responses = [
+        QuizAttemptAnswerResponse(
+            id=ans.id,
+            attempt_id=ans.attempt_id,
+            question_id=ans.question_id,
+            selected_option_id=ans.selected_option_id,
+            descriptive_answer=ans.descriptive_answer,
+            marks_obtained=ans.marks_obtained,
+            is_correct=ans.is_correct,
+            graded_by=ans.graded_by,
+            graded_at=ans.graded_at,
+            feedback=ans.feedback,
+            created_at=ans.created_at
+        )
+        for ans in answers
+    ]
+    
+    # Explicitly construct QuizAttemptResponse
     return QuizAttemptWithAnswers(
-        **attempt.__dict__,
+        id=attempt.id,
+        quiz_id=attempt.quiz_id,
+        student_id=attempt.student_id,
+        started_at=attempt.started_at,
+        submitted_at=attempt.submitted_at,
+        time_taken_minutes=attempt.time_taken_minutes,
+        status=attempt.status,
+        total_marks_obtained=attempt.total_marks_obtained,
+        feedback=attempt.feedback,
+        created_at=attempt.created_at,
         student_name=student.name if student else None,
         quiz_title=quiz.title if quiz else None,
-        answers=[ans.__dict__ for ans in answers]
+        answers=answer_responses
     )
+
+
+@router.get("/pending-grading-count")
+async def get_pending_grading_count(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_teacher)
+):
+    """Get count of quizzes with ungraded descriptive questions (Teacher only)."""
+    institute_id = request.state.institute_id
+    
+    from app.db.models.quiz import QuizAttempt, QuizAttemptAnswer, QuizQuestion, Quiz
+    
+    # Get all submitted attempts for quizzes created by this teacher
+    submitted_attempts = db.query(QuizAttempt).join(Quiz).filter(
+        and_(
+            Quiz.institute_id == institute_id,
+            Quiz.created_by == current_user.id,
+            QuizAttempt.status == "SUBMITTED"
+        )
+    ).all()
+    
+    # Count attempts with ungraded descriptive answers
+    pending_count = 0
+    for attempt in submitted_attempts:
+        # Check if there are any ungraded descriptive answers
+        ungraded = db.query(QuizAttemptAnswer).join(QuizQuestion).filter(
+            and_(
+                QuizAttemptAnswer.attempt_id == attempt.id,
+                QuizQuestion.question_type == "DESCRIPTIVE",
+                QuizAttemptAnswer.marks_obtained.is_(None)
+            )
+        ).count()
+        
+        if ungraded > 0:
+            pending_count += 1
+    
+    return {"count": pending_count}
+
+
+@router.get("/{quiz_id}/analytics")
+async def get_quiz_analytics(
+    quiz_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_teacher)
+):
+    """Get analytics for a specific quiz (Teacher only)."""
+    institute_id = request.state.institute_id
+    
+    # Verify quiz belongs to teacher
+    quiz = QuizService.get_quiz(db, quiz_id, institute_id, current_user.id)
+    
+    from app.db.models.quiz import QuizAttempt, QuizAttemptAnswer, QuizQuestion, QuizOption
+    from app.db.models.enrollment import Enrollment
+    from sqlalchemy import func
+    
+    # Get all attempts for this quiz
+    attempts = db.query(QuizAttempt).filter(
+        QuizAttempt.quiz_id == quiz_id
+    ).all()
+    
+    # Get enrolled students count
+    enrolled_students = db.query(Enrollment).filter(
+        Enrollment.class_id == quiz.class_id
+    ).count()
+    
+    # Calculate statistics
+    submitted_attempts = [a for a in attempts if a.status in ["SUBMITTED", "GRADED"]]
+    total_attempts = len(submitted_attempts)
+    completion_rate = (total_attempts / enrolled_students * 100) if enrolled_students > 0 else 0
+    
+    # Calculate average score
+    total_marks_sum = sum(a.total_marks_obtained or 0 for a in submitted_attempts)
+    average_score = (total_marks_sum / total_attempts) if total_attempts > 0 else 0
+    average_percentage = (average_score / quiz.total_marks * 100) if quiz.total_marks > 0 else 0
+    
+    # Get question-wise performance
+    questions = db.query(QuizQuestion).filter(
+        and_(
+            QuizQuestion.quiz_id == quiz_id,
+            QuizQuestion.is_active == True
+        )
+    ).order_by(QuizQuestion.order).all()
+    
+    question_stats = []
+    for question in questions:
+        # Get all answers for this question
+        answers = db.query(QuizAttemptAnswer).join(QuizAttempt).filter(
+            and_(
+                QuizAttemptAnswer.question_id == question.id,
+                QuizAttempt.quiz_id == quiz_id,
+                QuizAttempt.status.in_(["SUBMITTED", "GRADED"])
+            )
+        ).all()
+        
+        total_answers = len(answers)
+        correct_answers = sum(1 for a in answers if a.is_correct == True)
+        average_marks = (sum(a.marks_obtained or 0 for a in answers) / total_answers) if total_answers > 0 else 0
+        correct_percentage = (correct_answers / total_answers * 100) if total_answers > 0 else 0
+        
+        question_stats.append({
+            "question_id": question.id,
+            "question_text": question.question_text,
+            "question_type": question.question_type,
+            "marks": question.marks,
+            "total_answers": total_answers,
+            "correct_answers": correct_answers,
+            "correct_percentage": round(correct_percentage, 2),
+            "average_marks": round(average_marks, 2)
+        })
+    
+    # Get student performance (top and bottom performers)
+    student_performance = []
+    for attempt in submitted_attempts:
+        student = db.query(User).filter(User.id == attempt.student_id).first()
+        if student:
+            percentage = ((attempt.total_marks_obtained or 0) / quiz.total_marks * 100) if quiz.total_marks > 0 else 0
+            student_performance.append({
+                "student_id": student.id,
+                "student_name": student.name,
+                "marks_obtained": attempt.total_marks_obtained or 0,
+                "total_marks": quiz.total_marks,
+                "percentage": round(percentage, 2),
+                "submitted_at": attempt.submitted_at.isoformat() if attempt.submitted_at else None
+            })
+    
+    # Sort by percentage descending
+    student_performance.sort(key=lambda x: x["percentage"], reverse=True)
+    
+    return {
+        "quiz_id": quiz.id,
+        "quiz_title": quiz.title,
+        "total_students": enrolled_students,
+        "total_attempts": total_attempts,
+        "completion_rate": round(completion_rate, 2),
+        "average_score": round(average_score, 2),
+        "average_percentage": round(average_percentage, 2),
+        "total_marks": quiz.total_marks,
+        "question_statistics": question_stats,
+        "student_performance": student_performance
+    }

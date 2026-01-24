@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from typing import List, Optional
@@ -40,6 +41,149 @@ async def list_quizzes(
         ))
     
     return results
+
+
+# Attempts routes must come before /{quiz_id} route to avoid route conflicts
+@router.get("/attempts", response_model=List[QuizAttemptResponse])
+async def list_attempts(
+    request: Request,
+    db: Session = Depends(get_db),
+    quiz_id: Optional[int] = Query(None, description="Filter by quiz ID"),
+    current_user: User = Depends(get_student)
+):
+    """List all quiz attempts by the student."""
+    institute_id = request.state.institute_id
+    attempts = QuizAttemptService.get_student_attempts(
+        db, current_user.id, institute_id, quiz_id
+    )
+    
+    # Format responses
+    results = []
+    for attempt in attempts:
+        from app.db.models.quiz import Quiz
+        quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
+        
+        results.append(QuizAttemptResponse(
+            id=attempt.id,
+            quiz_id=int(attempt.quiz_id),  # Ensure it's an integer
+            student_id=attempt.student_id,
+            started_at=attempt.started_at,
+            submitted_at=attempt.submitted_at,
+            time_taken_minutes=attempt.time_taken_minutes,
+            status=attempt.status,
+            total_marks_obtained=attempt.total_marks_obtained,
+            feedback=attempt.feedback,
+            created_at=attempt.created_at,
+            student_name=current_user.name,
+            quiz_title=quiz.title if quiz else None
+        ))
+    
+    return results
+
+
+@router.get("/attempts/{attempt_id}", response_model=QuizAttemptWithAnswers)
+async def get_attempt_details(
+    attempt_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_student)
+):
+    """Get detailed attempt with answers (Student only)."""
+    institute_id = request.state.institute_id
+    
+    from app.db.models.quiz import QuizAttempt, QuizAttemptAnswer, Quiz
+    from app.schemas.quiz import QuizAttemptAnswerResponse
+    
+    attempt = db.query(QuizAttempt).join(Quiz).filter(
+        and_(
+            QuizAttempt.id == attempt_id,
+            QuizAttempt.student_id == current_user.id,
+            Quiz.institute_id == institute_id
+        )
+    ).first()
+    
+    if not attempt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attempt not found"
+        )
+    
+    # Load answers
+    answers = db.query(QuizAttemptAnswer).filter(
+        QuizAttemptAnswer.attempt_id == attempt_id
+    ).all()
+    
+    quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
+    
+    # Explicitly construct answer responses to avoid serialization issues
+    answer_responses = [
+        QuizAttemptAnswerResponse(
+            id=ans.id,
+            attempt_id=ans.attempt_id,
+            question_id=ans.question_id,
+            selected_option_id=ans.selected_option_id,
+            descriptive_answer=ans.descriptive_answer,
+            marks_obtained=ans.marks_obtained,
+            is_correct=ans.is_correct,
+            graded_by=ans.graded_by,
+            graded_at=ans.graded_at,
+            feedback=ans.feedback,
+            created_at=ans.created_at
+        )
+        for ans in answers
+    ]
+    
+    # Explicitly construct QuizAttemptWithAnswers
+    return QuizAttemptWithAnswers(
+        id=attempt.id,
+        quiz_id=attempt.quiz_id,
+        student_id=attempt.student_id,
+        started_at=attempt.started_at,
+        submitted_at=attempt.submitted_at,
+        time_taken_minutes=attempt.time_taken_minutes,
+        status=attempt.status,
+        total_marks_obtained=attempt.total_marks_obtained,
+        feedback=attempt.feedback,
+        created_at=attempt.created_at,
+        student_name=current_user.name,
+        quiz_title=quiz.title if quiz else None,
+        answers=answer_responses
+    )
+
+
+@router.post("/attempts/{attempt_id}/submit", response_model=QuizAttemptResponse)
+async def submit_quiz_attempt(
+    attempt_id: int,
+    submit_data: QuizAttemptSubmit,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_student)
+):
+    """Submit a quiz attempt with answers (Student only)."""
+    institute_id = request.state.institute_id
+    
+    attempt = QuizAttemptService.submit_attempt(
+        db, attempt_id, current_user.id, institute_id, submit_data.answers
+    )
+    
+    # Format response
+    from app.db.models.quiz import Quiz
+    quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
+    
+    return QuizAttemptResponse(
+        id=attempt.id,
+        quiz_id=int(attempt.quiz_id),  # Ensure it's an integer
+        student_id=attempt.student_id,
+        started_at=attempt.started_at,
+        submitted_at=attempt.submitted_at,
+        time_taken_minutes=attempt.time_taken_minutes,
+        status=attempt.status,
+        total_marks_obtained=attempt.total_marks_obtained,
+        feedback=attempt.feedback,
+        created_at=attempt.created_at,
+        student_name=current_user.name,
+        quiz_title=quiz.title if quiz else None
+    )
 
 
 @router.get("/{quiz_id}", response_model=QuizResponse)
@@ -142,6 +286,8 @@ async def get_quiz_questions_for_attempt(
     
     # Get questions
     from app.db.models.quiz import QuizQuestion, QuizOption
+    from app.schemas.quiz import QuizOptionResponse
+    
     questions = db.query(QuizQuestion).filter(
         and_(
             QuizQuestion.quiz_id == quiz_id,
@@ -153,13 +299,34 @@ async def get_quiz_questions_for_attempt(
     for question in questions:
         options = []
         if question.question_type == "MCQ":
-            options = db.query(QuizOption).filter(
+            option_list = db.query(QuizOption).filter(
                 QuizOption.question_id == question.id
             ).order_by(QuizOption.order).all()
+            
+            # Explicitly construct option responses to avoid serialization issues
+            options = [
+                QuizOptionResponse(
+                    id=opt.id,
+                    question_id=opt.question_id,
+                    option_text=opt.option_text,
+                    is_correct=opt.is_correct,
+                    order=opt.order,
+                    created_at=opt.created_at
+                )
+                for opt in option_list
+            ]
         
+        # Explicitly construct question response to avoid serialization issues
         results.append(QuizQuestionResponse(
-            **question.__dict__,
-            options=[opt.__dict__ for opt in options]
+            id=question.id,
+            quiz_id=question.quiz_id,
+            question_text=question.question_text,
+            question_type=question.question_type,
+            marks=question.marks,
+            order=question.order,
+            is_active=question.is_active,
+            created_at=question.created_at,
+            options=options
         ))
     
     return results
@@ -193,7 +360,7 @@ async def start_quiz_attempt(
         # Construct response explicitly to avoid serialization issues
         return QuizAttemptResponse(
             id=attempt.id,
-            quiz_id=attempt.quiz_id,
+            quiz_id=int(attempt.quiz_id),  # Ensure it's an integer
             student_id=attempt.student_id,
             started_at=attempt.started_at,
             submitted_at=attempt.submitted_at,
@@ -215,96 +382,3 @@ async def start_quiz_attempt(
         )
 
 
-@router.post("/attempts/{attempt_id}/submit", response_model=QuizAttemptResponse)
-async def submit_quiz_attempt(
-    attempt_id: int,
-    submit_data: QuizAttemptSubmit,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_student)
-):
-    """Submit a quiz attempt with answers (Student only)."""
-    institute_id = request.state.institute_id
-    
-    attempt = QuizAttemptService.submit_attempt(
-        db, attempt_id, current_user.id, institute_id, submit_data.answers
-    )
-    
-    # Format response
-    from app.db.models.quiz import Quiz
-    quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
-    
-    return QuizAttemptResponse(
-        **attempt.__dict__,
-        student_name=current_user.name,
-        quiz_title=quiz.title if quiz else None
-    )
-
-
-@router.get("/attempts", response_model=List[QuizAttemptResponse])
-async def list_attempts(
-    request: Request,
-    db: Session = Depends(get_db),
-    quiz_id: Optional[int] = None,
-    current_user: User = Depends(get_student)
-):
-    """List all quiz attempts by the student."""
-    institute_id = request.state.institute_id
-    attempts = QuizAttemptService.get_student_attempts(
-        db, current_user.id, institute_id, quiz_id
-    )
-    
-    # Format responses
-    results = []
-    for attempt in attempts:
-        from app.db.models.quiz import Quiz
-        quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
-        
-        results.append(QuizAttemptResponse(
-            **attempt.__dict__,
-            student_name=current_user.name,
-            quiz_title=quiz.title if quiz else None
-        ))
-    
-    return results
-
-
-@router.get("/attempts/{attempt_id}", response_model=QuizAttemptWithAnswers)
-async def get_attempt_details(
-    attempt_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_student)
-):
-    """Get detailed attempt with answers (Student only)."""
-    institute_id = request.state.institute_id
-    
-    from app.db.models.quiz import QuizAttempt, QuizAttemptAnswer
-    attempt = db.query(QuizAttempt).join(Quiz).filter(
-        and_(
-            QuizAttempt.id == attempt_id,
-            QuizAttempt.student_id == current_user.id,
-            Quiz.institute_id == institute_id
-        )
-    ).first()
-    
-    if not attempt:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Attempt not found"
-        )
-    
-    # Load answers
-    answers = db.query(QuizAttemptAnswer).filter(
-        QuizAttemptAnswer.attempt_id == attempt_id
-    ).all()
-    
-    from app.db.models.quiz import Quiz
-    quiz = db.query(Quiz).filter(Quiz.id == attempt.quiz_id).first()
-    
-    return QuizAttemptWithAnswers(
-        **attempt.__dict__,
-        student_name=current_user.name,
-        quiz_title=quiz.title if quiz else None,
-        answers=[ans.__dict__ for ans in answers]
-    )
