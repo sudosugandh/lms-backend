@@ -1,8 +1,7 @@
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import RedirectResponse
 from app.middleware.tenant_middleware import TenantMiddleware
 from app.api import auth, super_admin, admin, teacher, student, parent, public
 from app.core.config import settings
@@ -13,11 +12,14 @@ import logging
 log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
 logging.basicConfig(
     level=log_level,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s" if settings.ENVIRONMENT == "development" else "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s" 
+           if settings.ENVIRONMENT == "development" 
+           else "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
 
+# Create FastAPI app instance
 app = FastAPI(
     title="Multi-Tenant LMS API",
     description="Multi-tenant Learning Management System with domain-based tenant resolution",
@@ -37,54 +39,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Tenant resolution middleware (must be after CORS)
+# Tenant resolution middleware (after CORS)
 app.add_middleware(TenantMiddleware)
 
-# Global exception handlers
+# Exception handlers
 @app.exception_handler(BaseAPIException)
 async def api_exception_handler(request: Request, exc: BaseAPIException):
-    """Handle custom API exceptions with consistent error format."""
     logger.warning(f"API Exception: {exc.status_code} - {exc.detail}")
     response = JSONResponse(
         status_code=exc.status_code,
         content=exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
     )
-    # Ensure CORS headers are added to error responses
     origin = request.headers.get("origin")
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with consistent format and CORS headers."""
     logger.warning(f"HTTP Exception: {exc.status_code} - {exc.detail}")
     response = JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail}
     )
-    # Ensure CORS headers are added to error responses
     origin = request.headers.get("origin")
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle validation errors with consistent format."""
     errors = exc.errors()
     logger.warning(f"Validation Error on {request.url.path}: {errors}")
-    # Format errors for better readability
-    error_messages = []
-    for error in errors:
-        loc = " -> ".join(str(l) for l in error.get("loc", []))
-        msg = error.get("msg", "Validation error")
-        error_messages.append(f"{loc}: {msg}")
-    
+    error_messages = [
+        f"{' -> '.join(str(l) for l in error.get('loc', []))}: {error.get('msg', 'Validation error')}" 
+        for error in errors
+    ]
     detail = "Validation error: " + "; ".join(error_messages) if error_messages else "Validation error"
     response = JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -94,17 +86,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error_data": {"errors": errors}
         }
     )
-    # Ensure CORS headers are added to error responses
     origin = request.headers.get("origin")
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
-
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unexpected exceptions."""
     logger.error(f"Unexpected error: {type(exc).__name__}: {str(exc)}", exc_info=True)
     response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -113,13 +102,11 @@ async def general_exception_handler(request: Request, exc: Exception):
             "error_code": "INTERNAL_ERROR"
         }
     )
-    # Ensure CORS headers are added to error responses
     origin = request.headers.get("origin")
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
-
 
 # Include routers
 app.include_router(auth.router)
@@ -130,19 +117,15 @@ app.include_router(student.router)
 app.include_router(parent.router)
 app.include_router(public.router)
 
-
+# Root endpoint redirects to docs
 @app.get("/", include_in_schema=False)
 async def root():
-    """Root endpoint - redirects to API documentation."""
     return RedirectResponse(url="/docs")
 
-
+# Health check
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
     return {"status": "healthy", "environment": settings.ENVIRONMENT}
 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+# ===== END OF FILE =====
+# No uvicorn.run() here – keep run.py for local development
