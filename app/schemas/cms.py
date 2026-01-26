@@ -6,8 +6,12 @@ from datetime import datetime
 class WebsiteSettingsBase(BaseModel):
     logo_url: Optional[str] = None
     favicon_url: Optional[str] = None
+    banner_images: Optional[List[str]] = None  # Array of banner image/video URLs
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
+    header_background: Optional[str] = None
+    custom_css: Optional[str] = None
+    custom_js: Optional[str] = None
     site_name: Optional[str] = None
     site_tagline: Optional[str] = None
     contact_email: Optional[str] = None

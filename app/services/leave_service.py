@@ -7,7 +7,7 @@ from app.db.models.leave import LeaveType, LeaveRequest, LeaveStatus
 from app.db.models.user import User, UserRole
 from app.db.models.class_model import Class
 from app.db.models.attendance import Attendance
-from app.schemas.leave import LeaveTypeCreate, LeaveRequestCreate
+from app.schemas.leave import LeaveTypeCreate, LeaveTypeUpdate, LeaveRequestCreate
 from app.services.class_service import ClassService
 
 
@@ -60,6 +60,102 @@ class LeaveTypeService:
                 LeaveType.is_active == True
             )
         ).all()
+    
+    @staticmethod
+    def get_all_leave_types(
+        db: Session,
+        institute_id: int
+    ) -> List[LeaveType]:
+        """Get all leave types for an institute (including inactive)."""
+        return db.query(LeaveType).filter(
+            LeaveType.institute_id == institute_id
+        ).all()
+    
+    @staticmethod
+    def get_leave_type(
+        db: Session,
+        leave_type_id: int,
+        institute_id: int
+    ) -> LeaveType:
+        """Get a specific leave type by ID."""
+        leave_type = db.query(LeaveType).filter(
+            and_(
+                LeaveType.id == leave_type_id,
+                LeaveType.institute_id == institute_id
+            )
+        ).first()
+        
+        if not leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Leave type not found"
+            )
+        
+        return leave_type
+    
+    @staticmethod
+    def update_leave_type(
+        db: Session,
+        leave_type_id: int,
+        institute_id: int,
+        leave_type_data: "LeaveTypeUpdate"
+    ) -> LeaveType:
+        """Update a leave type."""
+        leave_type = LeaveTypeService.get_leave_type(db, leave_type_id, institute_id)
+        
+        # Check if code already exists (excluding current leave type)
+        if leave_type_data.code != leave_type.code:
+            existing = db.query(LeaveType).filter(
+                and_(
+                    LeaveType.institute_id == institute_id,
+                    LeaveType.code == leave_type_data.code,
+                    LeaveType.id != leave_type_id
+                )
+            ).first()
+            
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Leave type code already exists"
+                )
+        
+        # Update fields
+        leave_type.name = leave_type_data.name
+        leave_type.code = leave_type_data.code
+        leave_type.description = leave_type_data.description
+        leave_type.max_days_per_year = leave_type_data.max_days_per_year
+        leave_type.requires_approval = leave_type_data.requires_approval
+        leave_type.is_active = leave_type_data.is_active
+        
+        db.commit()
+        db.refresh(leave_type)
+        return leave_type
+    
+    @staticmethod
+    def delete_leave_type(
+        db: Session,
+        leave_type_id: int,
+        institute_id: int
+    ) -> bool:
+        """Delete a leave type. Returns True if deleted, False if soft-deleted."""
+        leave_type = LeaveTypeService.get_leave_type(db, leave_type_id, institute_id)
+        
+        # Check if there are any leave requests using this type
+        from app.db.models.leave import LeaveRequest
+        existing_requests = db.query(LeaveRequest).filter(
+            LeaveRequest.leave_type_id == leave_type_id
+        ).count()
+        
+        if existing_requests > 0:
+            # Soft delete: mark as inactive instead of hard delete
+            leave_type.is_active = False
+            db.commit()
+            return False
+        else:
+            # Hard delete: no requests exist, safe to delete
+            db.delete(leave_type)
+            db.commit()
+            return True
 
 
 class LeaveRequestService:

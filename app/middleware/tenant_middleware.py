@@ -55,6 +55,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
             sys.stdout.flush()
             return await call_next(request)
         
+        # Skip tenant resolution for static file uploads (they don't need tenant context)
+        if request.url.path.startswith("/uploads"):
+            logger.info(f"[TENANT MIDDLEWARE] Static file path, skipping tenant resolution")
+            sys.stdout.flush()
+            return await call_next(request)
+        
         db: Session = None
         temp_db: Session = None
         try:

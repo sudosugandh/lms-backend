@@ -141,12 +141,11 @@ class AssignmentService:
         teacher_id: int,
         institute_id: int
     ) -> List[Assignment]:
-        """Get all assignments created by a teacher."""
+        """Get all assignments created by a teacher (including inactive ones)."""
         return db.query(Assignment).filter(
             and_(
                 Assignment.institute_id == institute_id,
-                Assignment.created_by == teacher_id,
-                Assignment.is_active == True
+                Assignment.created_by == teacher_id
             )
         ).order_by(Assignment.created_at.desc()).all()
     
@@ -179,6 +178,38 @@ class AssignmentService:
         ).order_by(Assignment.deadline.asc()).all()
         
         return assignments
+    
+    @staticmethod
+    def delete_assignment(
+        db: Session,
+        assignment_id: int,
+        institute_id: int,
+        teacher_id: int
+    ) -> None:
+        """Delete an assignment (only if no submissions exist)."""
+        assignment = AssignmentService.get_assignment(
+            db, assignment_id, institute_id, teacher_id
+        )
+        
+        # Check if there are any submissions
+        submission_count = db.query(AssignmentSubmission).filter(
+            AssignmentSubmission.assignment_id == assignment_id
+        ).count()
+        
+        if submission_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete assignment with existing submissions. Deactivate it instead."
+            )
+        
+        # Delete related results first (cascade should handle this, but being explicit)
+        db.query(Result).filter(
+            Result.assignment_id == assignment_id
+        ).delete()
+        
+        # Delete the assignment
+        db.delete(assignment)
+        db.commit()
 
 
 class AssignmentSubmissionService:
@@ -274,6 +305,23 @@ class AssignmentSubmissionService:
         db.add(result)
         db.commit()
         db.refresh(submission)
+        
+        # Notify teacher about submission
+        from app.services.notification_service import NotificationService
+        from app.db.models.user import User
+        student = db.query(User).filter(User.id == student_id).first()
+        student_name = student.name if student else "A student"
+        
+        NotificationService.create_notification(
+            db=db,
+            institute_id=institute_id,
+            title="New Assignment Submission",
+            message=f"{student_name} has submitted the assignment '{assignment.title}'",
+            notification_type="ASSIGNMENT_SUBMITTED",
+            target_role="TEACHER",
+            target_user_id=assignment.created_by
+        )
+        
         return submission
     
     @staticmethod
@@ -336,6 +384,20 @@ class AssignmentSubmissionService:
         
         db.commit()
         db.refresh(submission)
+        
+        # Notify student about grading
+        from app.services.notification_service import NotificationService
+        percentage = (marks_obtained / assignment.total_marks * 100) if assignment.total_marks > 0 else 0
+        
+        NotificationService.create_notification(
+            db=db,
+            institute_id=institute_id,
+            title="Assignment Graded",
+            message=f"Your assignment '{assignment.title}' has been graded. Score: {marks_obtained}/{assignment.total_marks} ({percentage:.1f}%)",
+            notification_type="ASSIGNMENT_GRADED",
+            target_user_id=submission.student_id
+        )
+        
         return submission
     
     @staticmethod

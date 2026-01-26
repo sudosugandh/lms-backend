@@ -60,6 +60,28 @@ class FeeStructureService:
             query = query.filter(FeeStructure.is_active == is_active)
         
         return query.all()
+    
+    @staticmethod
+    def get_fee_structure(
+        db: Session,
+        structure_id: int,
+        institute_id: int
+    ) -> FeeStructure:
+        """Get a specific fee structure."""
+        fee_structure = db.query(FeeStructure).filter(
+            and_(
+                FeeStructure.id == structure_id,
+                FeeStructure.institute_id == institute_id
+            )
+        ).first()
+        
+        if not fee_structure:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fee structure not found"
+            )
+        
+        return fee_structure
 
 
 class FeeInvoiceService:

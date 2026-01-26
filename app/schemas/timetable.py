@@ -50,6 +50,14 @@ class TimetableSlotCreate(TimetableSlotBase):
     timetable_id: int
 
 
+class TimetableSlotUpdate(BaseModel):
+    day_of_week: Optional[int] = None
+    period_number: Optional[int] = None
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    is_active: Optional[bool] = None
+
+
 class TimetableSlotResponse(TimetableSlotBase):
     id: int
     timetable_id: int
@@ -69,6 +77,13 @@ class TimetableAssignmentBase(BaseModel):
 
 class TimetableAssignmentCreate(TimetableAssignmentBase):
     slot_id: int
+
+
+class TimetableAssignmentUpdate(BaseModel):
+    subject_id: Optional[int] = None
+    teacher_id: Optional[int] = None
+    room: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class TimetableAssignmentResponse(TimetableAssignmentBase):

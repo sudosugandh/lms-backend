@@ -4,7 +4,7 @@ from typing import List
 from app.db.session import get_db
 from app.db.models.user import User
 from app.schemas.leave import (
-    LeaveTypeCreate, LeaveTypeResponse, LeaveRequestResponse, LeaveRequestUpdate
+    LeaveTypeCreate, LeaveTypeUpdate, LeaveTypeResponse, LeaveRequestResponse, LeaveRequestUpdate
 )
 from app.services.leave_service import LeaveTypeService, LeaveRequestService
 from app.utils.dependencies import get_institute_admin
@@ -33,7 +33,72 @@ async def list_leave_types(
 ):
     """List all leave types (Admin only)."""
     institute_id = request.state.institute_id
-    return LeaveTypeService.get_leave_types(db, institute_id)
+    return LeaveTypeService.get_all_leave_types(db, institute_id)
+
+
+@router.get("/types/{leave_type_id}", response_model=LeaveTypeResponse)
+async def get_leave_type(
+    leave_type_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Get a specific leave type (Admin only)."""
+    institute_id = request.state.institute_id
+    return LeaveTypeService.get_leave_type(db, leave_type_id, institute_id)
+
+
+@router.put("/types/{leave_type_id}", response_model=LeaveTypeResponse)
+async def update_leave_type(
+    leave_type_id: int,
+    leave_type_data: LeaveTypeUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Update a leave type (Admin only)."""
+    institute_id = request.state.institute_id
+    leave_type = LeaveTypeService.update_leave_type(
+        db, leave_type_id, institute_id, leave_type_data
+    )
+    
+    # Log audit event
+    log_audit_event(
+        db=db,
+        user_id=current_user.id,
+        action=AuditAction.LEAVE_TYPE_UPDATED,
+        request=request,
+        details=f"Updated leave type #{leave_type_id}: {leave_type.name}"
+    )
+    
+    return leave_type
+
+
+@router.delete("/types/{leave_type_id}")
+async def delete_leave_type(
+    leave_type_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Delete a leave type (Admin only)."""
+    institute_id = request.state.institute_id
+    leave_type = LeaveTypeService.get_leave_type(db, leave_type_id, institute_id)
+    was_hard_deleted = LeaveTypeService.delete_leave_type(db, leave_type_id, institute_id)
+    
+    # Log audit event
+    log_audit_event(
+        db=db,
+        user_id=current_user.id,
+        action=AuditAction.LEAVE_TYPE_DELETED,
+        request=request,
+        details=f"{'Deleted' if was_hard_deleted else 'Deactivated'} leave type #{leave_type_id}: {leave_type.name}"
+    )
+    
+    return {
+        "message": "Leave type deleted successfully" if was_hard_deleted else "Leave type deactivated (has existing requests)",
+        "hard_deleted": was_hard_deleted
+    }
 
 
 @router.get("/requests", response_model=List[LeaveRequestResponse])
@@ -62,7 +127,20 @@ async def list_leave_requests(
             approver_name = approver.name if approver else None
         
         results.append(LeaveRequestResponse(
-            **lr.__dict__,
+            id=lr.id,
+            institute_id=lr.institute_id,
+            user_id=lr.user_id,
+            leave_type_id=lr.leave_type_id,
+            start_date=lr.start_date,
+            end_date=lr.end_date,
+            reason=lr.reason,
+            number_of_days=lr.number_of_days,
+            status=lr.status,
+            approved_by=lr.approved_by,
+            approved_at=lr.approved_at,
+            rejection_reason=lr.rejection_reason,
+            created_at=lr.created_at,
+            updated_at=lr.updated_at,
             user_name=user.name if user else None,
             leave_type_name=leave_type.name if leave_type else None,
             approver_name=approver_name
@@ -99,7 +177,20 @@ async def approve_leave_request(
     )
     
     return LeaveRequestResponse(
-        **leave_request.__dict__,
+        id=leave_request.id,
+        institute_id=leave_request.institute_id,
+        user_id=leave_request.user_id,
+        leave_type_id=leave_request.leave_type_id,
+        start_date=leave_request.start_date,
+        end_date=leave_request.end_date,
+        reason=leave_request.reason,
+        number_of_days=leave_request.number_of_days,
+        status=leave_request.status,
+        approved_by=leave_request.approved_by,
+        approved_at=leave_request.approved_at,
+        rejection_reason=leave_request.rejection_reason,
+        created_at=leave_request.created_at,
+        updated_at=leave_request.updated_at,
         user_name=user.name if user else None,
         leave_type_name=leave_type.name if leave_type else None,
         approver_name=current_user.name
@@ -142,7 +233,20 @@ async def reject_leave_request(
     )
     
     return LeaveRequestResponse(
-        **leave_request.__dict__,
+        id=leave_request.id,
+        institute_id=leave_request.institute_id,
+        user_id=leave_request.user_id,
+        leave_type_id=leave_request.leave_type_id,
+        start_date=leave_request.start_date,
+        end_date=leave_request.end_date,
+        reason=leave_request.reason,
+        number_of_days=leave_request.number_of_days,
+        status=leave_request.status,
+        approved_by=leave_request.approved_by,
+        approved_at=leave_request.approved_at,
+        rejection_reason=leave_request.rejection_reason,
+        created_at=leave_request.created_at,
+        updated_at=leave_request.updated_at,
         user_name=user.name if user else None,
         leave_type_name=leave_type.name if leave_type else None,
         approver_name=current_user.name

@@ -11,8 +11,12 @@ class WebsiteSettings(Base):
     institute_id = Column(Integer, ForeignKey("institutes.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     logo_url = Column(String(500), nullable=True)
     favicon_url = Column(String(500), nullable=True)
+    banner_images = Column(JSON, nullable=True)  # Array of banner image/video URLs
     primary_color = Column(String(20), nullable=True, default="#3B82F6")
     secondary_color = Column(String(20), nullable=True, default="#1E40AF")
+    header_background = Column(String(20), nullable=True)  # Header background color
+    custom_css = Column(Text, nullable=True)  # Custom CSS code
+    custom_js = Column(Text, nullable=True)  # Custom JavaScript code
     site_name = Column(String(255), nullable=True)
     site_tagline = Column(String(500), nullable=True)
     contact_email = Column(String(255), nullable=True)

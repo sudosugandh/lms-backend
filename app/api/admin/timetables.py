@@ -5,8 +5,8 @@ from app.db.session import get_db
 from app.db.models.user import User
 from app.schemas.timetable import (
     TimetableCreate, TimetableUpdate, TimetableResponse,
-    TimetableSlotCreate, TimetableSlotResponse,
-    TimetableAssignmentCreate, TimetableAssignmentResponse,
+    TimetableSlotCreate, TimetableSlotUpdate, TimetableSlotResponse,
+    TimetableAssignmentCreate, TimetableAssignmentUpdate, TimetableAssignmentResponse,
     TimetableWithSlots
 )
 from app.services.timetable_service import (
@@ -137,6 +137,32 @@ async def create_slot(
     return TimetableSlotService.create_slot(db, institute_id, slot_data)
 
 
+@router.put("/slots/{slot_id}", response_model=TimetableSlotResponse)
+async def update_slot(
+    slot_id: int,
+    slot_data: TimetableSlotUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Update a timetable slot (Admin only)."""
+    institute_id = request.state.institute_id
+    return TimetableSlotService.update_slot(db, slot_id, institute_id, slot_data)
+
+
+@router.delete("/slots/{slot_id}", status_code=204)
+async def delete_slot(
+    slot_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Delete a timetable slot (Admin only)."""
+    institute_id = request.state.institute_id
+    TimetableSlotService.delete_slot(db, slot_id, institute_id)
+    return None
+
+
 @router.post("/assignments", response_model=TimetableAssignmentResponse, status_code=201)
 async def create_assignment(
     assignment_data: TimetableAssignmentCreate,
@@ -164,3 +190,46 @@ async def create_assignment(
         subject_name=subject.name if subject else None,
         teacher_name=teacher_name
     )
+
+
+@router.put("/assignments/{assignment_id}", response_model=TimetableAssignmentResponse)
+async def update_assignment(
+    assignment_id: int,
+    assignment_data: TimetableAssignmentUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Update a timetable assignment (Admin only)."""
+    institute_id = request.state.institute_id
+    assignment = TimetableAssignmentService.update_assignment(
+        db, assignment_id, institute_id, assignment_data
+    )
+    
+    # Format response
+    from app.db.models.subject import Subject
+    subject = db.query(Subject).filter(Subject.id == assignment.subject_id).first()
+    
+    teacher_name = None
+    if assignment.teacher_id:
+        teacher = db.query(User).filter(User.id == assignment.teacher_id).first()
+        teacher_name = teacher.name if teacher else None
+    
+    return TimetableAssignmentResponse(
+        **assignment.__dict__,
+        subject_name=subject.name if subject else None,
+        teacher_name=teacher_name
+    )
+
+
+@router.delete("/assignments/{assignment_id}", status_code=204)
+async def delete_assignment(
+    assignment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Delete a timetable assignment (Admin only)."""
+    institute_id = request.state.institute_id
+    TimetableAssignmentService.delete_assignment(db, assignment_id, institute_id)
+    return None

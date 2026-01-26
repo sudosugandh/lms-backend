@@ -238,7 +238,6 @@ class AssignmentSubmissionResponse(AssignmentSubmissionBase):
 
 class AssignmentSubmissionGrade(BaseModel):
     """Request model for grading assignment submission"""
-    submission_id: int
     marks_obtained: int
     feedback: Optional[str] = None
 

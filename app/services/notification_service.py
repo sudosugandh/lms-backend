@@ -294,3 +294,40 @@ class NotificationService:
         ).count()
         
         return count
+    
+    @staticmethod
+    def delete_user_notification(
+        db: Session,
+        notification_id: int,
+        user_id: int,
+        institute_id: int
+    ) -> bool:
+        """Delete (hide) a notification for a specific user by removing read status."""
+        # Verify notification belongs to institute
+        notification = db.query(Notification).filter(
+            and_(
+                Notification.id == notification_id,
+                Notification.institute_id == institute_id
+            )
+        ).first()
+        
+        if not notification:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Notification not found"
+            )
+        
+        # Delete read status (this effectively hides it from user)
+        read_status = db.query(NotificationReadStatus).filter(
+            and_(
+                NotificationReadStatus.notification_id == notification_id,
+                NotificationReadStatus.user_id == user_id
+            )
+        ).first()
+        
+        if read_status:
+            db.delete(read_status)
+            db.commit()
+            return True
+        
+        return False

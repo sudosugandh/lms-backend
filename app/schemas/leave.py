@@ -16,6 +16,10 @@ class LeaveTypeCreate(LeaveTypeBase):
     pass
 
 
+class LeaveTypeUpdate(LeaveTypeBase):
+    pass
+
+
 class LeaveTypeResponse(LeaveTypeBase):
     id: int
     institute_id: int

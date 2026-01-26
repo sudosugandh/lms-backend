@@ -94,3 +94,26 @@ async def mark_all_read(
     institute_id = request.state.institute_id
     count = NotificationService.mark_all_read(db, current_user.id, institute_id)
     return {"message": f"Marked {count} notifications as read"}
+
+
+@router.delete("/{notification_id}")
+async def delete_notification(
+    notification_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_student)
+):
+    """Delete (hide) a notification for the current user (Student only)."""
+    institute_id = request.state.institute_id
+    deleted = NotificationService.delete_user_notification(
+        db, notification_id, current_user.id, institute_id
+    )
+    
+    if not deleted:
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found or already deleted"
+        )
+    
+    return {"message": "Notification deleted successfully"}

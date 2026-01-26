@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.student import attendance, quizzes, assignments, results, leave, timetables, notifications, fees, certificates, gradebook, permissions
+from app.api.student import attendance, quizzes, assignments, results, leave, timetables, notifications, fees, certificates, gradebook, permissions, files
 
 router = APIRouter(prefix="/student", tags=["student"])
 
@@ -14,3 +14,4 @@ router.include_router(fees.router)
 router.include_router(certificates.router)
 router.include_router(gradebook.router)
 router.include_router(permissions.router)
+router.include_router(files.router)

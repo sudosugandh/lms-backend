@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
     
+    # File Upload
+    UPLOAD_DIR: str = "uploads"
+    API_BASE_URL: Optional[str] = None  # Will be set from request if not provided
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

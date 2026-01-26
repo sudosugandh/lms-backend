@@ -9,8 +9,8 @@ from app.db.models.user import User
 from app.db.models.class_subject import ClassSubject
 from app.db.models.enrollment import Enrollment
 from app.schemas.timetable import (
-    TimetableCreate, TimetableUpdate, TimetableSlotCreate,
-    TimetableAssignmentCreate
+    TimetableCreate, TimetableUpdate, TimetableSlotCreate, TimetableSlotUpdate,
+    TimetableAssignmentCreate, TimetableAssignmentUpdate
 )
 from app.services.class_service import ClassService, SubjectService, ClassSubjectService
 
@@ -211,6 +211,60 @@ class TimetableSlotService:
                 TimetableSlot.is_active == True
             )
         ).order_by(TimetableSlot.day_of_week, TimetableSlot.period_number).all()
+    
+    @staticmethod
+    def update_slot(
+        db: Session,
+        slot_id: int,
+        institute_id: int,
+        slot_data: TimetableSlotUpdate
+    ) -> TimetableSlot:
+        """Update a timetable slot."""
+        slot = db.query(TimetableSlot).join(Timetable).filter(
+            and_(
+                TimetableSlot.id == slot_id,
+                Timetable.institute_id == institute_id
+            )
+        ).first()
+        
+        if not slot:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Slot not found"
+            )
+        
+        update_data = slot_data.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(slot, field, value)
+        
+        db.commit()
+        db.refresh(slot)
+        return slot
+    
+    @staticmethod
+    def delete_slot(
+        db: Session,
+        slot_id: int,
+        institute_id: int
+    ) -> bool:
+        """Delete a timetable slot (soft delete by setting is_active=False)."""
+        slot = db.query(TimetableSlot).join(Timetable).filter(
+            and_(
+                TimetableSlot.id == slot_id,
+                Timetable.institute_id == institute_id
+            )
+        ).first()
+        
+        if not slot:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Slot not found"
+            )
+        
+        # Soft delete: set is_active to False
+        slot.is_active = False
+        db.commit()
+        return True
 
 
 class TimetableAssignmentService:
@@ -301,3 +355,106 @@ class TimetableAssignmentService:
         db.commit()
         db.refresh(assignment)
         return assignment
+    
+    @staticmethod
+    def update_assignment(
+        db: Session,
+        assignment_id: int,
+        institute_id: int,
+        assignment_data: TimetableAssignmentUpdate
+    ) -> TimetableAssignment:
+        """Update a timetable assignment."""
+        assignment = db.query(TimetableAssignment).join(
+            TimetableSlot
+        ).join(Timetable).filter(
+            and_(
+                TimetableAssignment.id == assignment_id,
+                Timetable.institute_id == institute_id
+            )
+        ).first()
+        
+        if not assignment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assignment not found"
+            )
+        
+        update_data = assignment_data.dict(exclude_unset=True)
+        
+        # If subject_id is being updated, verify it belongs to institute
+        if 'subject_id' in update_data:
+            SubjectService.get_subject(db, update_data['subject_id'], institute_id)
+        
+        # If teacher_id is being updated, verify teacher
+        if 'teacher_id' in update_data and update_data['teacher_id']:
+            slot = db.query(TimetableSlot).filter(
+                TimetableSlot.id == assignment.slot_id
+            ).first()
+            timetable = db.query(Timetable).filter(
+                Timetable.id == slot.timetable_id
+            ).first()
+            
+            teacher = db.query(User).filter(
+                and_(
+                    User.id == update_data['teacher_id'],
+                    User.institute_id == institute_id,
+                    User.role == "TEACHER",
+                    User.is_active == True
+                )
+            ).first()
+            
+            if not teacher:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Teacher not found or inactive"
+                )
+            
+            # Verify teacher is assigned to this class-subject
+            subject_id = update_data.get('subject_id', assignment.subject_id)
+            class_subject = db.query(ClassSubject).filter(
+                and_(
+                    ClassSubject.class_id == timetable.class_id,
+                    ClassSubject.subject_id == subject_id,
+                    ClassSubject.teacher_id == update_data['teacher_id']
+                )
+            ).first()
+            
+            if not class_subject:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Teacher is not assigned to this subject in this class"
+                )
+        
+        for field, value in update_data.items():
+            setattr(assignment, field, value)
+        
+        db.commit()
+        db.refresh(assignment)
+        return assignment
+    
+    @staticmethod
+    def delete_assignment(
+        db: Session,
+        assignment_id: int,
+        institute_id: int
+    ) -> bool:
+        """Delete a timetable assignment (soft delete by setting is_active=False)."""
+        assignment = db.query(TimetableAssignment).join(
+            TimetableSlot
+        ).join(Timetable).filter(
+            and_(
+                TimetableAssignment.id == assignment_id,
+                Timetable.institute_id == institute_id
+            )
+        ).first()
+        
+        if not assignment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assignment not found"
+            )
+        
+        # Soft delete: set is_active to False
+        assignment.is_active = False
+        db.commit()
+        return True

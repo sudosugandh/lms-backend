@@ -69,6 +69,98 @@ async def list_fee_structures(
     return results
 
 
+@router.put("/structures/{structure_id}", response_model=FeeStructureResponse)
+async def update_fee_structure(
+    structure_id: int,
+    fee_structure_data: FeeStructureUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Update a fee structure (Admin only)."""
+    institute_id = request.state.institute_id
+    fee_structure = FeeStructureService.get_fee_structure(
+        db, structure_id, institute_id
+    )
+    
+    # Update fields
+    if fee_structure_data.name is not None:
+        fee_structure.name = fee_structure_data.name
+    if fee_structure_data.description is not None:
+        fee_structure.description = fee_structure_data.description
+    if fee_structure_data.academic_year is not None:
+        fee_structure.academic_year = fee_structure_data.academic_year
+    if fee_structure_data.total_amount is not None:
+        fee_structure.total_amount = fee_structure_data.total_amount
+    if fee_structure_data.is_active is not None:
+        fee_structure.is_active = fee_structure_data.is_active
+    
+    db.commit()
+    db.refresh(fee_structure)
+    
+    # Format response
+    from app.db.models.class_model import Class
+    class_obj = db.query(Class).filter(Class.id == fee_structure.class_id).first() if fee_structure.class_id else None
+    
+    # Log audit event
+    log_audit_event(
+        db=db,
+        user_id=current_user.id,
+        action=AuditAction.FEE_STRUCTURE_UPDATED,
+        request=request,
+        details=f"Updated fee structure #{structure_id}: {fee_structure.name}"
+    )
+    
+    return FeeStructureResponse(
+        **fee_structure.__dict__,
+        class_name=class_obj.name if class_obj else None
+    )
+
+
+@router.delete("/structures/{structure_id}")
+async def delete_fee_structure(
+    structure_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_institute_admin)
+):
+    """Delete a fee structure (Admin only)."""
+    institute_id = request.state.institute_id
+    fee_structure = FeeStructureService.get_fee_structure(
+        db, structure_id, institute_id
+    )
+    
+    # Check if there are invoices using this structure
+    invoice_count = db.query(FeeInvoice).filter(
+        FeeInvoice.fee_structure_id == structure_id
+    ).count()
+    
+    if invoice_count > 0:
+        # Soft delete: mark as inactive
+        fee_structure.is_active = False
+        db.commit()
+        was_hard_deleted = False
+    else:
+        # Hard delete: no invoices exist
+        db.delete(fee_structure)
+        db.commit()
+        was_hard_deleted = True
+    
+    # Log audit event
+    log_audit_event(
+        db=db,
+        user_id=current_user.id,
+        action=AuditAction.FEE_STRUCTURE_DELETED,
+        request=request,
+        details=f"{'Deleted' if was_hard_deleted else 'Deactivated'} fee structure #{structure_id}: {fee_structure.name}"
+    )
+    
+    return {
+        "message": "Fee structure deleted successfully" if was_hard_deleted else "Fee structure deactivated (has existing invoices)",
+        "hard_deleted": was_hard_deleted
+    }
+
+
 # Fee Invoice endpoints
 @router.post("/invoices", response_model=FeeInvoiceResponse, status_code=201)
 async def generate_invoice(

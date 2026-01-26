@@ -154,6 +154,44 @@ async def grade_submission(
     )
 
 
+@router.delete("/{assignment_id}")
+async def delete_assignment(
+    assignment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_teacher)
+):
+    """Delete an assignment (Teacher only)."""
+    institute_id = request.state.institute_id
+    AssignmentService.delete_assignment(
+        db, assignment_id, institute_id, current_user.id
+    )
+    return {"message": "Assignment deleted successfully"}
+
+
+@router.get("/pending-grading-count")
+async def get_pending_grading_count(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_teacher)
+):
+    """Get count of assignments with ungraded submissions (Teacher only)."""
+    institute_id = request.state.institute_id
+    
+    from app.db.models.assignment import Assignment, AssignmentSubmission
+    
+    # Get all submitted assignments created by this teacher that have ungraded submissions
+    ungraded_count = db.query(AssignmentSubmission).join(Assignment).filter(
+        and_(
+            Assignment.institute_id == institute_id,
+            Assignment.created_by == current_user.id,
+            AssignmentSubmission.status == "SUBMITTED"
+        )
+    ).count()
+    
+    return {"count": ungraded_count}
+
+
 @router.post("/quizzes/answers/{answer_id}/grade")
 async def grade_quiz_answer(
     answer_id: int,
