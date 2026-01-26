@@ -17,6 +17,14 @@ class WebsiteSettingsBase(BaseModel):
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     contact_address: Optional[str] = None
+    # SMTP Email Configuration
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None  # Only for admin updates
+    smtp_use_tls: Optional[bool] = True
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None
     meta_title: Optional[str] = None
     meta_description: Optional[str] = None
     meta_keywords: Optional[str] = None
@@ -39,6 +47,14 @@ class WebsiteSettingsResponse(WebsiteSettingsBase):
     updated_by: Optional[int] = None
     created_at: datetime
     updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class WebsiteSettingsAdminResponse(WebsiteSettingsResponse):
+    """Admin response includes SMTP password for configuration."""
+    smtp_password: Optional[str] = None  # Include password for admin view
     
     class Config:
         from_attributes = True

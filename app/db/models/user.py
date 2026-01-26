@@ -23,6 +23,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(UserRole), nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    profile_picture = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships

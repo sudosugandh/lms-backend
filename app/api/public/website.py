@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, Request, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 from app.db.session import get_db
 from app.services.cms_service import CMSService
 from app.services.page_service import PageService
-from app.db.models.page import PageTranslation
+from app.services.email_service import EmailService
+from app.db.models.page import PageTranslation, Page
 from app.schemas.cms import PublicWebsiteData, WebsiteSettingsResponse, NavigationItemResponse, PageContentResponse
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 router = APIRouter(prefix="/website", tags=["public-website"])
 
@@ -18,7 +20,6 @@ async def get_public_website_data(
 ):
     """Get all public website data for the resolved institute."""
     if not hasattr(request.state, 'institute_id'):
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Institute not resolved: institute_id missing"
@@ -30,7 +31,6 @@ async def get_public_website_data(
         
         # Ensure settings exists
         if not data.get("settings"):
-            from fastapi import HTTPException, status
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Website settings could not be loaded"
@@ -56,7 +56,6 @@ async def get_public_website_data(
     except HTTPException:
         raise
     except Exception as e:
-        from fastapi import HTTPException, status
         import traceback
         error_detail = str(e)
         error_traceback = traceback.format_exc()
@@ -76,7 +75,6 @@ async def get_website_settings(
 ):
     """Get website settings for the resolved institute."""
     if not hasattr(request.state, 'institute_id'):
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Institute not resolved: institute_id missing"
@@ -85,7 +83,6 @@ async def get_website_settings(
     settings = CMSService.get_website_settings(db, institute_id)
     
     if not settings:
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Website settings not found"
@@ -101,7 +98,6 @@ async def get_navigation(
 ):
     """Get navigation items for the resolved institute."""
     if not hasattr(request.state, 'institute_id'):
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Institute not resolved: institute_id missing"
@@ -120,7 +116,6 @@ async def get_page_content(
 ):
     """Get published page content for the resolved institute."""
     if not hasattr(request.state, 'institute_id'):
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Institute not resolved: institute_id missing"
@@ -129,7 +124,6 @@ async def get_page_content(
     page = CMSService.get_page_content(db, institute_id, page_slug, published_only=True)
     
     if not page:
-        from fastapi import HTTPException, status
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Page '{page_slug}' not found or not published"
@@ -220,3 +214,216 @@ async def get_public_page(
         content=translation.embedded_code or "",
         locale=translation.locale
     )
+
+
+# Header navigation pages endpoint
+class HeaderNavigationPage(BaseModel):
+    id: int
+    slug: str
+    name: str  # From translation
+    page_type: str
+    sequence: int
+    custom_page_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+@router.get("/header-pages", response_model=List[HeaderNavigationPage])
+async def get_header_pages(
+    request: Request,
+    db: Session = Depends(get_db),
+    locale: Optional[str] = None
+):
+    """Get pages that should appear in the header navigation (add_in_header_menu = True)."""
+    if not hasattr(request.state, 'institute_id'):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Institute not resolved: institute_id missing"
+        )
+    institute_id = request.state.institute_id
+    
+    # Default to English if no locale specified
+    if not locale:
+        locale = "en"
+    
+    # Get pages with add_in_header_menu = True and is_approved = True
+    pages = db.query(Page).filter(
+        and_(
+            Page.institute_id == institute_id,
+            Page.add_in_header_menu == True,
+            Page.is_approved == True
+        )
+    ).order_by(Page.sequence.asc(), Page.created_at.asc()).all()
+    
+    header_pages = []
+    for page in pages:
+        # Get translation for the requested locale
+        translation = db.query(PageTranslation).filter(
+            and_(
+                PageTranslation.page_id == page.id,
+                PageTranslation.locale == locale
+            )
+        ).first()
+        
+        # Fallback to English if translation not found
+        if not translation:
+            translation = db.query(PageTranslation).filter(
+                and_(
+                    PageTranslation.page_id == page.id,
+                    PageTranslation.locale == "en"
+                )
+            ).first()
+        
+        # Fallback to first available translation
+        if not translation:
+            translation = db.query(PageTranslation).filter(
+                PageTranslation.page_id == page.id
+            ).first()
+        
+        if translation:
+            header_pages.append(HeaderNavigationPage(
+                id=page.id,
+                slug=page.slug,
+                name=translation.name,
+                page_type=page.page_type.value if hasattr(page.page_type, 'value') else str(page.page_type),
+                sequence=page.sequence,
+                custom_page_url=page.custom_page_url
+            ))
+    
+    return header_pages
+
+
+# Footer navigation pages endpoint
+class FooterNavigationPage(BaseModel):
+    id: int
+    slug: str
+    name: str  # From translation
+    page_type: str
+    sequence: int
+    custom_page_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+@router.get("/footer-pages", response_model=List[FooterNavigationPage])
+async def get_footer_pages(
+    request: Request,
+    db: Session = Depends(get_db),
+    locale: Optional[str] = None
+):
+    """Get pages that should appear in the footer navigation (show_menu_on_footer = True)."""
+    if not hasattr(request.state, 'institute_id'):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Institute not resolved: institute_id missing"
+        )
+    institute_id = request.state.institute_id
+    
+    # Default to English if no locale specified
+    if not locale:
+        locale = "en"
+    
+    # Get pages with show_menu_on_footer = True and is_approved = True
+    pages = db.query(Page).filter(
+        and_(
+            Page.institute_id == institute_id,
+            Page.show_menu_on_footer == True,
+            Page.is_approved == True
+        )
+    ).order_by(Page.sequence.asc(), Page.created_at.asc()).all()
+    
+    footer_pages = []
+    for page in pages:
+        # Get translation for the requested locale
+        translation = db.query(PageTranslation).filter(
+            and_(
+                PageTranslation.page_id == page.id,
+                PageTranslation.locale == locale
+            )
+        ).first()
+        
+        # Fallback to English if translation not found
+        if not translation:
+            translation = db.query(PageTranslation).filter(
+                and_(
+                    PageTranslation.page_id == page.id,
+                    PageTranslation.locale == "en"
+                )
+            ).first()
+        
+        # Fallback to first available translation
+        if not translation:
+            translation = db.query(PageTranslation).filter(
+                PageTranslation.page_id == page.id
+            ).first()
+        
+        if translation:
+            footer_pages.append(FooterNavigationPage(
+                id=page.id,
+                slug=page.slug,
+                name=translation.name,
+                page_type=page.page_type.value if hasattr(page.page_type, 'value') else str(page.page_type),
+                sequence=page.sequence,
+                custom_page_url=page.custom_page_url
+            ))
+    
+    return footer_pages
+
+
+# Contact form submission
+class ContactFormRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255, description="Sender's name")
+    email: EmailStr = Field(..., description="Sender's email address")
+    subject: str = Field(..., min_length=1, max_length=255, description="Message subject")
+    message: str = Field(..., min_length=1, max_length=5000, description="Message content")
+
+
+class ContactFormResponse(BaseModel):
+    success: bool
+    message: str
+
+
+@router.post("/contact/submit", response_model=ContactFormResponse)
+async def submit_contact_form(
+    request: Request,
+    form_data: ContactFormRequest,
+    db: Session = Depends(get_db)
+):
+    """Submit contact form - sends email to institute's configured contact email."""
+    if not hasattr(request.state, 'institute_id'):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Institute not resolved: institute_id missing"
+        )
+    institute_id = request.state.institute_id
+    
+    # Validate that contact email is configured
+    settings = CMSService.get_website_settings(db, institute_id)
+    if not settings or not settings.contact_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Contact email is not configured for this institute. Please contact the administrator."
+        )
+    
+    # Send email using email service
+    success = EmailService.send_contact_form_email(
+        db=db,
+        institute_id=institute_id,
+        name=form_data.name,
+        email=form_data.email,
+        subject=form_data.subject,
+        message=form_data.message
+    )
+    
+    if success:
+        return ContactFormResponse(
+            success=True,
+            message="Thank you for your message! We'll get back to you soon."
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send email. Please try again later or contact us directly."
+        )

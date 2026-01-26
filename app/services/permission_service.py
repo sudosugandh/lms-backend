@@ -108,6 +108,11 @@ class PermissionService:
             all_perms = PermissionService.get_all_permissions(db)
             return {PermissionService.get_permission_string(p.module, p.action) for p in all_perms}
         
+        # ADMIN has all permissions at institute level (full access)
+        if user.role == UserRole.ADMIN:
+            all_perms = PermissionService.get_all_permissions(db)
+            return {PermissionService.get_permission_string(p.module, p.action) for p in all_perms}
+        
         # Get role permissions
         role_perms = PermissionService.get_role_permissions(db, user.role.value)
         return {PermissionService.get_permission_string(p.module, p.action) for p in role_perms}
@@ -115,8 +120,12 @@ class PermissionService:
     @staticmethod
     def user_has_permission(db: Session, user: 'User', module: str, action: str) -> bool:
         """Check if user has a specific permission."""
-        # SUPER_ADMIN bypasses all checks
+        # SUPER_ADMIN bypasses all checks (system-wide)
         if user.role == UserRole.SUPER_ADMIN:
+            return True
+        
+        # ADMIN bypasses all checks at institute level (full access)
+        if user.role == UserRole.ADMIN:
             return True
         
         permission_str = PermissionService.get_permission_string(module, action)

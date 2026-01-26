@@ -270,3 +270,47 @@ class AttendanceService:
             query = query.filter(Attendance.subject_id == subject_id)
         
         return query.order_by(Attendance.attendance_date.desc()).all()
+    
+    @staticmethod
+    def get_institute_attendance(
+        db: Session,
+        institute_id: int,
+        class_id: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> List[Attendance]:
+        """Get attendance records for an entire institute (Admin only)."""
+        # Get all classes in the institute
+        classes = db.query(Class).filter(
+            and_(
+                Class.institute_id == institute_id,
+                Class.is_active == True
+            )
+        ).all()
+        
+        if not classes:
+            return []
+        
+        class_ids = [c.id for c in classes]
+        
+        # Build query
+        query = db.query(Attendance).filter(
+            Attendance.class_id.in_(class_ids)
+        )
+        
+        if class_id:
+            # Verify class belongs to institute
+            if class_id not in class_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Class not found in this institute"
+                )
+            query = query.filter(Attendance.class_id == class_id)
+        
+        if start_date:
+            query = query.filter(Attendance.attendance_date >= start_date)
+        
+        if end_date:
+            query = query.filter(Attendance.attendance_date <= end_date)
+        
+        return query.order_by(Attendance.attendance_date.desc()).all()

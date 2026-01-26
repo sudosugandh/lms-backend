@@ -7,6 +7,7 @@ from app.db.models.notification import Notification, NotificationReadStatus
 from app.db.models.user import User
 from app.db.models.class_model import Class
 from app.db.models.enrollment import Enrollment
+from app.services.email_service import EmailService
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,15 @@ class NotificationService:
             
             db.commit()
             db.refresh(notification)
+            
+            # Send email notifications to target users (non-blocking)
+            NotificationService._send_email_notifications(
+                db=db,
+                institute_id=institute_id,
+                notification=notification,
+                target_user_ids=target_user_ids
+            )
+            
             return notification
         except Exception as e:
             # Log error but don't fail the main operation
@@ -331,3 +341,106 @@ class NotificationService:
             return True
         
         return False
+    
+    @staticmethod
+    def _send_email_notifications(
+        db: Session,
+        institute_id: int,
+        notification: Notification,
+        target_user_ids: List[int]
+    ):
+        """
+        Send email notifications to target users (non-blocking).
+        This runs asynchronously and doesn't block the main operation.
+        """
+        try:
+            # Get user emails
+            users = db.query(User).filter(
+                User.id.in_(target_user_ids)
+            ).all()
+            
+            if not users:
+                return
+            
+            # Get email config to check if SMTP is configured
+            email_config = EmailService.get_email_config(db, institute_id)
+            if not email_config or not email_config.get('smtp_config'):
+                # SMTP not configured, skip email sending
+                logger.debug(f"SMTP not configured for institute {institute_id}, skipping email notifications")
+                return
+            
+            # Generate email content based on notification type
+            email_subject = notification.title
+            
+            # Customize email body based on notification type
+            email_body_html = NotificationService._generate_email_html(notification)
+            email_body_text = NotificationService._generate_email_text(notification)
+            
+            # Send emails to all target users
+            for user in users:
+                if user.email:
+                    try:
+                        EmailService.send_email(
+                            db=db,
+                            institute_id=institute_id,
+                            to_email=user.email,
+                            subject=email_subject,
+                            body_html=email_body_html,
+                            body_text=email_body_text
+                        )
+                        logger.info(f"Email notification sent to {user.email} for notification: {notification.title}")
+                    except Exception as e:
+                        # Log but don't fail - email sending is optional
+                        logger.warning(f"Failed to send email notification to {user.email}: {str(e)}")
+                        
+        except Exception as e:
+            # Log but don't fail - email sending is optional
+            logger.warning(f"Failed to send email notifications: {str(e)}")
+    
+    @staticmethod
+    def _generate_email_html(notification: Notification) -> str:
+        """Generate HTML email body based on notification type."""
+        base_html = f"""
+        <html>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+              <h2 style="color: #3B82F6;">{notification.title}</h2>
+              <p>{notification.message}</p>
+        """
+        
+        # Add metadata if available
+        if notification.notification_metadata:
+            metadata = notification.notification_metadata
+            if isinstance(metadata, dict):
+                if 'deadline' in metadata:
+                    base_html += f'<p style="color: #666; margin-top: 15px;"><strong>Deadline:</strong> {metadata.get("deadline", "")}</p>'
+                if 'marks_obtained' in metadata and 'total_marks' in metadata:
+                    base_html += f'<p style="color: #666; margin-top: 15px;"><strong>Score:</strong> {metadata.get("marks_obtained", 0)}/{metadata.get("total_marks", 0)}</p>'
+        
+        base_html += """
+              <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+              <p style="color: #666; font-size: 12px;">
+                This is an automated notification from your LMS.
+              </p>
+            </div>
+          </body>
+        </html>
+        """
+        return base_html
+    
+    @staticmethod
+    def _generate_email_text(notification: Notification) -> str:
+        """Generate plain text email body."""
+        text = f"{notification.title}\n\n{notification.message}\n"
+        
+        # Add metadata if available
+        if notification.notification_metadata:
+            metadata = notification.notification_metadata
+            if isinstance(metadata, dict):
+                if 'deadline' in metadata:
+                    text += f"\nDeadline: {metadata.get('deadline', '')}\n"
+                if 'marks_obtained' in metadata and 'total_marks' in metadata:
+                    text += f"\nScore: {metadata.get('marks_obtained', 0)}/{metadata.get('total_marks', 0)}\n"
+        
+        text += "\n---\nThis is an automated notification from your LMS."
+        return text

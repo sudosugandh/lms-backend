@@ -20,6 +20,7 @@ class UserMe(BaseModel):
     role: str
     institute_id: Optional[int] = None
     is_active: bool
+    profile_picture: Optional[str] = None
     
     class Config:
         from_attributes = True

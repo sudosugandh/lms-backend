@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db.session import get_db
 from app.db.models.user import User
+from app.db.models.class_model import Class
 from app.schemas.class_model import ClassCreate, ClassUpdate, ClassResponse, SubjectCreate, SubjectUpdate, SubjectResponse, ClassSubjectCreate, ClassSubjectResponse, EnrollmentCreate, EnrollmentResponse
 from app.services.class_service import ClassService, SubjectService, ClassSubjectService, EnrollmentService
 from app.utils.dependencies import get_institute_admin

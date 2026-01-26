@@ -115,5 +115,6 @@ async def get_current_user_info(
         email=current_user.email,
         role=current_user.role.value,
         institute_id=current_user.institute_id,
-        is_active=current_user.is_active
+        is_active=current_user.is_active,
+        profile_picture=current_user.profile_picture
     )

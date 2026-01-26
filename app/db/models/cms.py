@@ -22,6 +22,14 @@ class WebsiteSettings(Base):
     contact_email = Column(String(255), nullable=True)
     contact_phone = Column(String(50), nullable=True)
     contact_address = Column(Text, nullable=True)
+    # SMTP Email Configuration (per-institute)
+    smtp_host = Column(String(255), nullable=True)  # e.g., smtp.gmail.com
+    smtp_port = Column(Integer, nullable=True, default=587)
+    smtp_username = Column(String(255), nullable=True)
+    smtp_password = Column(Text, nullable=True)  # Encrypted password
+    smtp_use_tls = Column(Boolean, default=True, nullable=False)
+    smtp_from_email = Column(String(255), nullable=True)  # From email address
+    smtp_from_name = Column(String(255), nullable=True)  # From name
     meta_title = Column(String(255), nullable=True)
     meta_description = Column(Text, nullable=True)
     meta_keywords = Column(String(500), nullable=True)

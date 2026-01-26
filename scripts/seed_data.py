@@ -16,7 +16,9 @@ from app.db.session import SessionLocal
 from app.db.models.institute import Institute
 from app.db.models.domain import Domain
 from app.db.models.user import User, UserRole
+from app.db.models.cms import WebsiteSettings
 from app.core.security import get_password_hash
+from app.services.cms_service import CMSService
 
 
 def seed_data():
@@ -133,12 +135,21 @@ def seed_data():
         else:
             print("✓ Admin for Institute 2 already exists")
         
+        # Initialize WebsiteSettings for each institute
+        for institute in [institute1, institute2]:
+            settings = CMSService.get_website_settings(db, institute.id)
+            if settings:
+                print(f"✓ WebsiteSettings already exists for {institute.name}")
+            else:
+                print(f"✓ Created WebsiteSettings for {institute.name}")
+        
         db.commit()
         print("\n✅ Seed data created successfully!")
         print("\nTest Credentials:")
         print("Super Admin: superadmin@lms.com / SuperAdmin123!")
         print("Admin 1: admin1@institute1.com / Admin123!")
         print("Admin 2: admin2@institute2.com / Admin123!")
+        print("\n⚠️  IMPORTANT: Run 'python scripts/seed_permissions.py' to seed permissions!")
         
     except Exception as e:
         db.rollback()
